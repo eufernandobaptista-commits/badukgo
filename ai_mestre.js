@@ -1,157 +1,151 @@
 /**
- * AI MESTRE V2 - HEURÍSTICA TÁTICA + BUSCA DE INFLUÊNCIA
- * Esta versão prioriza captura, sobrevivência e território.
+ * IA MESTRE V3 - MONTE CARLO TREE SEARCH (MCTS) COM ÁRVORE DE DECISÃO
+ * Este é o motor mais próximo do AlphaGo que podemos rodar em JS puro.
  */
+
+// Configurações de força
+const SIMULATIONS = 3000; // Milhares de simulações por jogada
+const EXPLORATION_PARAM = 1.41; // Equilíbrio entre explorar novo e jogar o seguro
 
 self.onmessage = function(e) {
     const { board, size, player } = e.data;
-    const move = getMasterMove(board, size, player);
-    self.postMessage(move);
+    const bestMove = runMCTS(board, size, player);
+    self.postMessage(bestMove);
 };
 
-function getMasterMove(board, size, aiPlayer) {
-    let candidates = [];
-    const opponent = aiPlayer === 1 ? 2 : 1;
+function runMCTS(currentBoard, size, aiPlayer) {
+    const root = {
+        board: currentBoard,
+        player: aiPlayer,
+        moves: getValidMoves(currentBoard, size),
+        children: new Map(),
+        visits: 0,
+        wins: 0
+    };
 
+    for (let i = 0; i < SIMULATIONS; i++) {
+        let node = root;
+        let tempBoard = JSON.parse(JSON.stringify(currentBoard));
+        let path = [node];
+
+        // 1. SELEÇÃO (Desce na árvore usando a lógica UCT)
+        while (node.moves.length === 0 && node.children.size > 0) {
+            node = selectBestChild(node);
+            applyMoveToBoard(tempBoard, node.move.r, node.move.c, node.player);
+            path.push(node);
+        }
+
+        // 2. EXPANSÃO (Cria um novo nó se ainda não explorou tudo)
+        if (node.moves.length > 0) {
+            const move = node.moves.pop();
+            const nextPlayer = node.player === 1 ? 2 : 1;
+            const newNode = {
+                move: move,
+                player: nextPlayer,
+                moves: getValidMoves(tempBoard, size),
+                children: new Map(),
+                visits: 0,
+                wins: 0
+            };
+            node.children.set(`${move.r},${move.c}`, newNode);
+            applyMoveToBoard(tempBoard, move.r, move.c, nextPlayer);
+            node = newNode;
+            path.push(node);
+        }
+
+        // 3. SIMULAÇÃO (Rollout - joga rápido até o fim para ver quem ganha)
+        const winner = simulateRandomPlayout(tempBoard, size, node.player);
+
+        // 4. BACKPROPAGATION (Sobe os resultados para a raiz)
+        for (let n of path) {
+            n.visits++;
+            if (winner === aiPlayer) n.wins++;
+            else if (winner !== 0) n.wins -= 0.5; // Penaliza derrota
+        }
+    }
+
+    // Escolhe a jogada mais visitada (a mais testada e segura)
+    let bestMove = null;
+    let maxVisits = -1;
+    for (let child of root.children.values()) {
+        if (child.visits > maxVisits) {
+            maxVisits = child.visits;
+            bestMove = child.move;
+        }
+    }
+    return bestMove;
+}
+
+function selectBestChild(node) {
+    let bestScore = -Infinity;
+    let bestChild = null;
+
+    for (let child of node.children.values()) {
+        // Fórmula UCT (AlphaGo)
+        const uctScore = (child.wins / child.visits) + 
+            EXPLORATION_PARAM * Math.sqrt(Math.log(node.visits) / child.visits);
+        
+        if (uctScore > bestScore) {
+            bestScore = ucbScore;
+            bestChild = child;
+        }
+    }
+    return bestChild || Array.from(node.children.values())[0];
+}
+
+function simulateRandomPlayout(board, size, lastPlayer) {
+    let currentPlayer = lastPlayer === 1 ? 2 : 1;
+    // Simula apenas 30 movimentos para manter a performance alta
+    for (let i = 0; i < 30; i++) {
+        const moves = getValidMoves(board, size);
+        if (moves.length === 0) break;
+        const move = moves[Math.floor(Math.random() * moves.length)];
+        board[move.r][move.c] = currentPlayer;
+        currentPlayer = currentPlayer === 1 ? 2 : 1;
+    }
+    return evaluateTerritory(board, size);
+}
+
+function evaluateTerritory(board, size) {
+    let black = 0, white = 0;
+    for(let r=0; r<size; r++) {
+        for(let c=0; c<size; c++) {
+            if(board[r][c] === 1) black++;
+            else if(board[r][c] === 2) white++;
+        }
+    }
+    if (white > black) return 2;
+    if (black > white) return 1;
+    return 0;
+}
+
+function getValidMoves(board, size) {
+    const moves = [];
     for (let r = 0; r < size; r++) {
         for (let c = 0; c < size; c++) {
             if (board[r][c] === 0) {
-                let score = evaluatePosition(board, r, c, aiPlayer, opponent, size);
-                if (score > -1000) { // Filtra suicídios óbvios
-                    candidates.push({ r, c, score });
+                // Filtro de proximidade (Essencial para Go):
+                // Só avalia casas perto de pedras já jogadas para economizar CPU
+                if (hasNeighbor(board, r, c, size)) {
+                    moves.push({r, c});
                 }
             }
         }
     }
-
-    // Ordena pelas melhores jogadas
-    candidates.sort((a, b) => b.score - a.score);
-
-    // Se não houver jogadas boas, passa a vez
-    if (candidates.length === 0) return null;
-
-    // Escolhe entre as 2 melhores para não ser 100% previsível
-    const bestOnes = candidates.slice(0, 2);
-    return bestOnes[Math.floor(Math.random() * bestOnes.length)];
+    if (moves.length === 0) return [{r: 9, c: 9}]; // Fallback para o centro
+    return moves.sort(() => Math.random() - 0.5); // Embaralha para variedade
 }
 
-function evaluatePosition(board, r, c, ai, hum, size) {
-    let score = 0;
-
-    // 1. PRIORIDADE MÁXIMA: CAPTURA (Matar peças do humano)
-    if (wouldCapture(board, r, c, ai, hum, size)) {
-        score += 500; 
-    }
-
-    // 2. PRIORIDADE ALTA: SALVAMENTO (Não deixar o humano te capturar)
-    if (isUnderAtari(board, r, c, ai, size)) {
-        score += 400;
-    }
-    
-    // Bloquear capturas do humano
-    if (wouldCapture(board, r, c, hum, ai, size)) {
-        score += 350;
-    }
-
-    // 3. ESTRATÉGIA DE TERRITÓRIO (Influência)
-    const neighbors = getNeighbors(r, c, size);
-    neighbors.forEach(n => {
-        if (board[n.r][n.c] === ai) score += 30; // Conectar pedras
-        if (board[n.r][n.c] === hum) score += 15; // Pressionar oponente
-    });
-
-    // 4. POSICIONAMENTO CLÁSSICO (Cantos e Laterais no início)
-    // No Go, os cantos são mais fáceis de dominar
-    const distEdgeR = Math.min(r, size - 1 - r);
-    const distEdgeC = Math.min(c, size - 1 - c);
-    if (distEdgeR === 3 && distEdgeC === 3) score += 100; // Pontos Hoshi
-    if (distEdgeR < 2 || distEdgeC < 2) score -= 20; // Evita a borda extrema (linha 1)
-
-    // 5. EVITAR SUICÍDIO (Não jogar onde será capturado)
-    if (isSuicide(board, r, c, ai, size)) {
-        return -2000;
-    }
-
-    // 6. ALEATORIEDADE LEVE (Para exploração)
-    score += Math.random() * 10;
-
-    return score;
-}
-
-// --- FUNÇÕES TÁTICAS AUXILIARES ---
-
-function getNeighbors(r, c, size) {
-    const n = [];
-    if (r > 0) n.push({r: r-1, c: c});
-    if (r < size-1) n.push({r: r+1, c: c});
-    if (c > 0) n.push({r: r, c: c-1});
-    if (c < size-1) n.push({r: r, c: c+1});
-    return n;
-}
-
-function wouldCapture(board, r, c, player, opponent, size) {
-    let tempBoard = board.map(row => [...row]);
-    tempBoard[r][c] = player;
-    let captures = false;
-    
-    const neighbors = getNeighbors(r, c, size);
-    neighbors.forEach(n => {
-        if (tempBoard[n.r][n.c] === opponent) {
-            if (countLiberties(tempBoard, n.r, n.c, opponent, size) === 0) {
-                captures = true;
-            }
-        }
-    });
-    return captures;
-}
-
-function isUnderAtari(board, r, c, player, size) {
-    // Verifica se colocar uma pedra aqui ajuda a salvar um grupo em perigo
-    const neighbors = getNeighbors(r, c, size);
-    for (let n of neighbors) {
-        if (board[n.r][n.c] === player) {
-            if (countLiberties(board, n.r, n.c, player, size) === 1) return true;
+function hasNeighbor(board, r, c, size) {
+    for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+            let nr = r + dr, nc = c + dc;
+            if (nr >= 0 && nr < size && nc >= 0 && nc < size && board[nr][nc] !== 0) return true;
         }
     }
     return false;
 }
 
-function isSuicide(board, r, c, player, size) {
-    let tempBoard = board.map(row => [...row]);
-    tempBoard[r][c] = player;
-    
-    // Se a própria pedra não tem liberdades e não captura ninguém, é suicídio
-    if (countLiberties(tempBoard, r, c, player, size) === 0) {
-        const opponent = player === 1 ? 2 : 1;
-        if (!wouldCapture(board, r, c, player, opponent, size)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-function countLiberties(board, r, c, color, size, visited = new Set()) {
-    const stack = [{r, c}];
-    let liberties = 0;
-    const groupVisited = new Set();
-    groupVisited.add(`${r},${c}`);
-
-    while (stack.length > 0) {
-        const curr = stack.pop();
-        const neighbors = getNeighbors(curr.r, curr.c, size);
-        
-        for (let n of neighbors) {
-            const key = `${n.r},${n.c}`;
-            if (board[n.r][n.c] === 0) {
-                if (!visited.has(key)) {
-                    liberties++;
-                    visited.add(key);
-                }
-            } else if (board[n.r][n.c] === color && !groupVisited.has(key)) {
-                groupVisited.add(key);
-                stack.push(n);
-            }
-        }
-    }
-    return liberties;
+function applyMoveToBoard(board, r, c, p) {
+    board[r][c] = p;
 }

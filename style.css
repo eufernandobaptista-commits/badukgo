@@ -1,0 +1,5 @@
+body { background-color: #2c3e50; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+.container { text-align: center; }
+canvas { background-color: #deb887; border: 2px solid #5d4037; box-shadow: 0 0 20px rgba(0,0,0,0.5); cursor: pointer; }
+.controls { margin-top: 20px; }
+button { padding: 10px 20px; font-size: 16px; cursor: pointer; background: #ecf0f1; border: none; border-radius: 5px; }

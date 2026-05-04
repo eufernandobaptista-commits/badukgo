@@ -126,42 +126,7 @@
             if (row >= 0 && row < size && col >= 0 && col < size && board[row][col] === 0) {
                 makeMove(row, col, 1);
                 // Simulando a IA enquanto não criamos o ai.js
-                document.getElementById('status').innerText = "IA pensando...";
-                setTimeout(() => {
-                    simpleAIMove();
-                }, 500);
-            }
-        });
-
-        function makeMove(row, col, player) {
-            board[row][col] = player;
-            drawBoard();
-            currentPlayer = (player === 1) ? 2 : 1;
-        }
-
-        function simpleAIMove() {
-            // IA ultra simples apenas para teste visual
-            for(let r=0; r<size; r++) {
-                for(let c=0; c<size; c++) {
-                    if(board[r][c] === 0) {
-                        makeMove(r, c, 2);
-                        document.getElementById('status').innerText = "Sua vez (Pretas)";
-                        return;
-                    }
-                }
-            }
-        }
-
-        function resetGame() {
-            board = Array(size).fill().map(() => Array(size).fill(0));
-            currentPlayer = 1;
-            drawBoard();
-        }
-
-        function passTurn() {
-            currentPlayer = 2;
-            simpleAIMove();
-        }
+                ai_mestre
 
         // Inicializa o desenho pela primeira vez
         drawBoard();

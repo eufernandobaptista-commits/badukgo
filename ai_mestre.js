@@ -1,143 +1,157 @@
 /**
- * AI Mestre - Motor de busca Monte Carlo (MCTS)
- * Este arquivo processa milhares de simulações para encontrar a jogada vencedora.
+ * AI MESTRE V2 - HEURÍSTICA TÁTICA + BUSCA DE INFLUÊNCIA
+ * Esta versão prioriza captura, sobrevivência e território.
  */
 
 self.onmessage = function(e) {
     const { board, size, player } = e.data;
-    
-    // Define a força da IA: 2000 simulações é um nível mestre para o navegador.
-    // Se ficar lento, diminua para 1000. Se quiser "impossível", aumente para 5000.
-    const iterations = 2000; 
-    
-    const bestMove = findBestMove(board, size, player, iterations);
-    self.postMessage(bestMove);
+    const move = getMasterMove(board, size, player);
+    self.postMessage(move);
 };
 
-function findBestMove(board, size, aiPlayer, iterations) {
-    const moves = getSmartMoves(board, size);
-    if (moves.length === 0) return null;
-    if (moves.length === 1) return moves[0];
-
-    // Inicializa estatísticas para cada jogada possível
-    moves.forEach(m => {
-        m.wins = 0;
-        m.visits = 0;
-    });
-
-    // Loop de Simulação MCTS
-    for (let i = 0; i < iterations; i++) {
-        // 1. Seleção (UCB1)
-        let move = selectMoveUCB(moves, i);
-        
-        // 2. Simulação (Rollout rápido)
-        let result = simulateGame(board, move, size, aiPlayer);
-        
-        // 3. Retropropagação
-        move.visits++;
-        if (result > 0) move.wins += result; 
-    }
-
-    // Ordena por maior número de visitas (a jogada mais estável)
-    moves.sort((a, b) => b.visits - a.visits);
-    return moves[0];
-}
-
-function selectMoveUCB(moves, totalIterations) {
-    let bestUCB = -Infinity;
-    let selected = moves[0];
-
-    for (let move of moves) {
-        if (move.visits === 0) return move; // Explora jogadas nunca testadas
-
-        const winRate = move.wins / move.visits;
-        const exploration = Math.sqrt(2 * Math.log(totalIterations + 1) / move.visits);
-        const ucb = winRate + 1.41 * exploration;
-
-        if (ucb > bestUCB) {
-            bestUCB = ucb;
-            selected = move;
-        }
-    }
-    return selected;
-}
-
-function simulateGame(initialBoard, move, size, aiPlayer) {
-    // Clone minimalista do tabuleiro
-    let tempBoard = initialBoard.map(row => [...row]);
-    tempBoard[move.r][move.c] = aiPlayer;
-
+function getMasterMove(board, size, aiPlayer) {
+    let candidates = [];
     const opponent = aiPlayer === 1 ? 2 : 1;
-    let currentPlayer = opponent;
-    
-    // Rollout: Joga 40 movimentos aleatórios rápidos para estimar o potencial da área
-    for (let i = 0; i < 40; i++) {
-        let r = Math.floor(Math.random() * size);
-        let c = Math.floor(Math.random() * size);
-        
-        if (tempBoard[r][c] === 0) {
-            tempBoard[r][c] = currentPlayer;
-            currentPlayer = currentPlayer === 1 ? 2 : 1;
-        }
-    }
-
-    return evaluateBoardHeuristic(tempBoard, aiPlayer, size);
-}
-
-function evaluateBoardHeuristic(board, aiPlayer, size) {
-    let score = 0;
-    const opponent = aiPlayer === 1 ? 2 : 1;
-
-    for (let r = 0; r < size; r++) {
-        for (let c = 0; c < size; c++) {
-            if (board[r][c] === aiPlayer) {
-                score += 1;
-                // Bônus por posição estratégica (distância das bordas)
-                if (r > 2 && r < size-3 && c > 2 && c < size-3) score += 0.5;
-            } else if (board[r][c] === opponent) {
-                score -= 1;
-            }
-        }
-    }
-    return score > 0 ? 1 : 0; // Retorna 1 se a IA está ganhando a simulação
-}
-
-function getSmartMoves(board, size) {
-    let moves = [];
-    let isEmpty = true;
 
     for (let r = 0; r < size; r++) {
         for (let c = 0; c < size; c++) {
             if (board[r][c] === 0) {
-                // Heurística de proximidade: No Go, jogadas boas costumam ser perto de pedras existentes
-                // Isso reduz drasticamente o tempo de processamento
-                if (hasNeighbor(board, r, c, size)) {
-                    moves.push({r, c});
-                    isEmpty = false;
+                let score = evaluatePosition(board, r, c, aiPlayer, opponent, size);
+                if (score > -1000) { // Filtra suicídios óbvios
+                    candidates.push({ r, c, score });
                 }
-            } else {
-                isEmpty = false;
             }
         }
     }
 
-    // Se o tabuleiro estiver vazio, sugere os pontos Hoshi (pontos pretos de referência)
-    if (isEmpty) {
-        return [{r: 3, c: 3}, {r: 3, c: 15}, {r: 15, c: 3}, {r: 15, c: 15}, {r: 9, c: 9}];
-    }
+    // Ordena pelas melhores jogadas
+    candidates.sort((a, b) => b.score - a.score);
 
-    return moves;
+    // Se não houver jogadas boas, passa a vez
+    if (candidates.length === 0) return null;
+
+    // Escolhe entre as 2 melhores para não ser 100% previsível
+    const bestOnes = candidates.slice(0, 2);
+    return bestOnes[Math.floor(Math.random() * bestOnes.length)];
 }
 
-function hasNeighbor(board, r, c, size) {
-    // Procura por pedras em um raio de 2 casas
-    for (let dr = -2; dr <= 2; dr++) {
-        for (let dc = -2; dc <= 2; dc++) {
-            let nr = r + dr, nc = c + dc;
-            if (nr >= 0 && nr < size && nc >= 0 && nc < size && board[nr][nc] !== 0) {
-                return true;
+function evaluatePosition(board, r, c, ai, hum, size) {
+    let score = 0;
+
+    // 1. PRIORIDADE MÁXIMA: CAPTURA (Matar peças do humano)
+    if (wouldCapture(board, r, c, ai, hum, size)) {
+        score += 500; 
+    }
+
+    // 2. PRIORIDADE ALTA: SALVAMENTO (Não deixar o humano te capturar)
+    if (isUnderAtari(board, r, c, ai, size)) {
+        score += 400;
+    }
+    
+    // Bloquear capturas do humano
+    if (wouldCapture(board, r, c, hum, ai, size)) {
+        score += 350;
+    }
+
+    // 3. ESTRATÉGIA DE TERRITÓRIO (Influência)
+    const neighbors = getNeighbors(r, c, size);
+    neighbors.forEach(n => {
+        if (board[n.r][n.c] === ai) score += 30; // Conectar pedras
+        if (board[n.r][n.c] === hum) score += 15; // Pressionar oponente
+    });
+
+    // 4. POSICIONAMENTO CLÁSSICO (Cantos e Laterais no início)
+    // No Go, os cantos são mais fáceis de dominar
+    const distEdgeR = Math.min(r, size - 1 - r);
+    const distEdgeC = Math.min(c, size - 1 - c);
+    if (distEdgeR === 3 && distEdgeC === 3) score += 100; // Pontos Hoshi
+    if (distEdgeR < 2 || distEdgeC < 2) score -= 20; // Evita a borda extrema (linha 1)
+
+    // 5. EVITAR SUICÍDIO (Não jogar onde será capturado)
+    if (isSuicide(board, r, c, ai, size)) {
+        return -2000;
+    }
+
+    // 6. ALEATORIEDADE LEVE (Para exploração)
+    score += Math.random() * 10;
+
+    return score;
+}
+
+// --- FUNÇÕES TÁTICAS AUXILIARES ---
+
+function getNeighbors(r, c, size) {
+    const n = [];
+    if (r > 0) n.push({r: r-1, c: c});
+    if (r < size-1) n.push({r: r+1, c: c});
+    if (c > 0) n.push({r: r, c: c-1});
+    if (c < size-1) n.push({r: r, c: c+1});
+    return n;
+}
+
+function wouldCapture(board, r, c, player, opponent, size) {
+    let tempBoard = board.map(row => [...row]);
+    tempBoard[r][c] = player;
+    let captures = false;
+    
+    const neighbors = getNeighbors(r, c, size);
+    neighbors.forEach(n => {
+        if (tempBoard[n.r][n.c] === opponent) {
+            if (countLiberties(tempBoard, n.r, n.c, opponent, size) === 0) {
+                captures = true;
             }
+        }
+    });
+    return captures;
+}
+
+function isUnderAtari(board, r, c, player, size) {
+    // Verifica se colocar uma pedra aqui ajuda a salvar um grupo em perigo
+    const neighbors = getNeighbors(r, c, size);
+    for (let n of neighbors) {
+        if (board[n.r][n.c] === player) {
+            if (countLiberties(board, n.r, n.c, player, size) === 1) return true;
         }
     }
     return false;
+}
+
+function isSuicide(board, r, c, player, size) {
+    let tempBoard = board.map(row => [...row]);
+    tempBoard[r][c] = player;
+    
+    // Se a própria pedra não tem liberdades e não captura ninguém, é suicídio
+    if (countLiberties(tempBoard, r, c, player, size) === 0) {
+        const opponent = player === 1 ? 2 : 1;
+        if (!wouldCapture(board, r, c, player, opponent, size)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function countLiberties(board, r, c, color, size, visited = new Set()) {
+    const stack = [{r, c}];
+    let liberties = 0;
+    const groupVisited = new Set();
+    groupVisited.add(`${r},${c}`);
+
+    while (stack.length > 0) {
+        const curr = stack.pop();
+        const neighbors = getNeighbors(curr.r, curr.c, size);
+        
+        for (let n of neighbors) {
+            const key = `${n.r},${n.c}`;
+            if (board[n.r][n.c] === 0) {
+                if (!visited.has(key)) {
+                    liberties++;
+                    visited.add(key);
+                }
+            } else if (board[n.r][n.c] === color && !groupVisited.has(key)) {
+                groupVisited.add(key);
+                stack.push(n);
+            }
+        }
+    }
+    return liberties;
 }
